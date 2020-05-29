@@ -72,7 +72,7 @@ where F: Thunk + Send
                     backoff.reset();
                 },
                 Err(_) => {
-                    backoff.spin();
+                    backoff.snooze();
                 },
             }
         }
@@ -122,7 +122,7 @@ where F: Thunk + Send {
                 }
             },
             Err(_) => {
-                backoff.spin();
+                backoff.snooze();
             },
         }
     }
