@@ -51,23 +51,18 @@ where F: Thunk + Send
         }
     }
 
-    pub fn scope<'a, F2, F3, S>(&self, this_thread_fn: Option<F2>, scope_fn: S)
+    pub fn scope<'a, F2, S>(&self, scope_fn: S)
     where
-        F2: Thunk + 'a,
-        F3: Thunk + Send + 'a,
-        S: FnOnce(&mut Scope<'a, F3>),
+        F2: Thunk + Send + 'a,
+        S: FnOnce(&mut Scope<'a, F2>),
     {
         let send_queue = unsafe { std::mem::transmute(&self.data.send_queue) };
 
         let mut scope = Scope::new(send_queue);
         scope_fn(&mut scope);
-
-        if this_thread_fn.is_some() {
-            this_thread_fn.unwrap().call_once();
-        }
+        let target_count = scope.consume();
 
         let backoff = Backoff::new();
-        let target_count = scope.consume();
         let mut count = 0;
         while count < target_count {
             match self.data.recv_queue.pop() {
@@ -138,6 +133,7 @@ where F: Thunk + Send
 {
     send_queue: &'a ArrayQueue<F>,
     counter: usize,
+    inplace_tasks: Vec<F>,
 }
 
 impl<'a, F> Scope<'a, F>
@@ -147,6 +143,7 @@ where F: Thunk + Send
         Scope {
             send_queue,
             counter: 0,
+            inplace_tasks: Vec::new(),
         }
     }
 
@@ -155,7 +152,12 @@ where F: Thunk + Send
         self.counter += 1;
     }
 
-    fn consume(self) -> usize {
+    pub fn spawn_inplace(&mut self, thunk: F) {
+        self.inplace_tasks.push(thunk);
+    }
+
+    fn consume(mut self) -> usize {
+        self.inplace_tasks.drain(..).for_each(|t| t.call_once());
         self.counter
     }
 }
@@ -173,19 +175,25 @@ mod tests {
     }
 
     #[test]
-    fn simple_test() {
+    fn api_test() {
         let pool = ThreadPool::<Task>::new(2, 16, "test");
 
         {
-            let mut number = 1;
+            let mut number1 = 1;
+            let mut number2 = 1;
 
-            pool.scope::<Task, Task, _>(None, |s| {
+            pool.scope(|s| {
+                s.spawn_inplace(Task {
+                    0: &mut number1,
+                });
+
                 s.spawn(Task {
-                    0: &mut number,
+                    0: &mut number2,
                 });
             });
 
-            assert_eq!(number, 2);
+            assert_eq!(number1, 2);
+            assert_eq!(number2, 2);
         }
     }
 }
