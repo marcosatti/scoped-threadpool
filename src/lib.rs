@@ -127,7 +127,7 @@ where F: Thunk + Send {
                 }
             },
             Err(_) => {
-                if snooze_count > 4096 {
+                if snooze_count > (1 << 16) {
                     thread::sleep(Duration::from_millis(16));
                 } else {
                     snooze_count += 1;
