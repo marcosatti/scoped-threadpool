@@ -18,6 +18,7 @@ use std::{
     },
     thread,
     thread::Result as ThreadResult,
+    time::Duration,
 };
 
 pub trait Thunk {
@@ -51,7 +52,7 @@ where F: Thunk + Send
         }
     }
 
-    pub fn scope<'a, F2, S>(&self, scope_fn: S)
+    pub fn scope<'a, F2, S>(&self, scope_fn: S) -> Result<(), usize>
     where
         F2: Thunk + Send + 'a,
         S: FnOnce(&mut Scope<'a, F2>),
@@ -64,10 +65,13 @@ where F: Thunk + Send
 
         let backoff = Backoff::new();
         let mut count = 0;
+        let mut error_count = 0;
         while count < target_count {
             match self.data.recv_queue.pop() {
                 Ok(r) => {
-                    r.unwrap();
+                    if let Err(_) = r {
+                        error_count += 1;
+                    }
                     count += 1;
                     backoff.reset();
                 },
@@ -75,6 +79,12 @@ where F: Thunk + Send
                     backoff.snooze();
                 },
             }
+        }
+
+        if error_count > 0 {
+            Err(error_count)
+        } else {
+            Ok(())
         }
     }
 }
@@ -111,18 +121,27 @@ where F: Thunk + Send
 fn thread_main<F>(data: Arc<Data<F>>)
 where F: Thunk + Send {
     let backoff = Backoff::new();
+    let mut snooze_count = 0;
 
     while !data.stop.load(Ordering::Relaxed) {
         match data.send_queue.pop() {
             Ok(thunk) => {
                 let result = catch_unwind(AssertUnwindSafe(move || thunk.call_once()));
                 match data.recv_queue.push(result) {
-                    Ok(()) => backoff.reset(),
+                    Ok(()) => {
+                        snooze_count = 0;
+                        backoff.reset();
+                    },
                     Err(_) => panic!("Error pushing to result queue"),
                 }
             },
             Err(_) => {
-                backoff.snooze();
+                if snooze_count > 4096 {
+                    thread::sleep(Duration::from_millis(16));
+                } else {
+                    snooze_count += 1;
+                    backoff.snooze();
+                }
             },
         }
     }
@@ -182,7 +201,7 @@ mod tests {
             let mut number1 = 1;
             let mut number2 = 1;
 
-            pool.scope(|s| {
+            let r = pool.scope(|s| {
                 s.spawn_inplace(Task {
                     0: &mut number1,
                 });
@@ -191,6 +210,8 @@ mod tests {
                     0: &mut number2,
                 });
             });
+
+            r.unwrap();
 
             assert_eq!(number1, 2);
             assert_eq!(number2, 2);
