@@ -52,7 +52,7 @@ where F: Thunk + Send
         }
     }
 
-    pub fn scope<'a, F2, S>(&self, scope_fn: S) -> Result<(), usize>
+    pub fn scope<'a, F2, S>(&self, scope_fn: S)
     where
         F2: Thunk + Send + 'a,
         S: FnOnce(&mut Scope<'a, F2>),
@@ -65,13 +65,10 @@ where F: Thunk + Send
 
         let backoff = Backoff::new();
         let mut count = 0;
-        let mut error_count = 0;
         while count < target_count {
             match self.data.recv_queue.pop() {
                 Ok(r) => {
-                    if let Err(_) = r {
-                        error_count += 1;
-                    }
+                    r.unwrap();
                     count += 1;
                     backoff.reset();
                 },
@@ -79,12 +76,6 @@ where F: Thunk + Send
                     backoff.snooze();
                 },
             }
-        }
-
-        if error_count > 0 {
-            Err(error_count)
-        } else {
-            Ok(())
         }
     }
 }
